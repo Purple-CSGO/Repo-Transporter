@@ -27,7 +27,7 @@ type Setting struct {
 	Repo          string
 	ThisOwner     string
 	ThisRepo      string
-	API           []string
+	Files         []string
 }
 
 type Asset struct {
@@ -137,6 +137,18 @@ func downloadFile(url string, location string) error {
 			return err
 		}
 	}
+
+	//删除已有同名文件
+	ok, err = isFileExisted(location + "/" + fileName)
+	if err != nil {
+		return err
+	} else if ok == true {
+		err = os.Remove(location + "/" + fileName)
+		if err != nil {
+			return err
+		}
+	}
+
 	//文件写入 先清空再写入 利用ioutil
 	err = ioutil.WriteFile(location+"/"+fileName, data, 0666)
 	if err != nil {
@@ -291,21 +303,13 @@ func readSettings(path string) (Setting, error) {
 		if err != nil {
 			return Setting{}, err
 		}
+		settingInst.Files = nil //清空API，防止累加
 
-		var transporter = Setting{
-			Version:       "0.1.4",
-			LatestVersion: "",
-			LocalVersion:  "",
-			Owner:         "advancedfx",
-			Repo:          "advancedfx",
-			ThisOwner:     "Purple-CSGO",
-			ThisRepo:      "HLAE-Release",
-			API:           []string{},
-		}
-		return transporter, nil
+		return settingInst, nil
+	} else {
+
+		return Setting{}, nil
 	}
-
-	return Setting{}, err
 }
 
 func saveSettings(path string) error {
@@ -314,48 +318,111 @@ func saveSettings(path string) error {
 	if err != nil {
 		return err
 	} else if exist == true {
-		//存在则读取文件
-		content, err := readAll(path)
+		//存在则删除文件
+		ok, err := isFileExisted(path)
+		if err != nil {
+			return err
+		} else if ok == true {
+			err := os.Remove(path)
+			if err != nil {
+				return err
+			}
+		}
+
+		JsonData, err := json.Marshal(Transporter) //第二个参数要地址传递
 		if err != nil {
 			return err
 		}
 
-		var settingInst Setting
-		err = json.Unmarshal([]byte(content), &settingInst) //第二个参数要地址传递
+		err = writeFast(path, string(JsonData))
 		if err != nil {
 			return err
 		}
-
 	}
 
 	return nil
 }
 
-func main() {
-	//1.读取settings.json，不存在或出错则赋默认值
-	Transporter := &Setting{
-		Version:       "0.1.0",
-		LatestVersion: "",
-		LocalVersion:  "",
-		Owner:         "advancedfx",
-		Repo:          "advancedfx",
-		ThisOwner:     "Purple-CSGO",
-		ThisRepo:      "HLAE-Release",
-		API:           []string{},
+///// optional functions to do with assets
+// Just Download , set subDir to true to download at ./$LatestVersion/
+func download(asset Asset, subDir bool) {
+	location := "./"
+	if subDir == true {
+		location = "./" + Transporter.LatestVersion + "/"
 	}
 
+	err := downloadFile(asset.BrowserDownloadURL, location)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	//Create and Add CDN API URL
+	var api string = "https://cdn.jsdelivr.net/gh/" + Transporter.ThisOwner + "/" + Transporter.ThisRepo + "@" + Transporter.LatestVersion + "/"
+	if subDir == true {
+		api += Transporter.LatestVersion + "/" + asset.Name
+	} else {
+		api += asset.Name
+	}
+	Transporter.Files = append(Transporter.Files, api)
+	//提示 hint
+	fmt.Println(" -- Downloaded")
+}
+
+// Suffix like ".doc"
+func downloadSuffix(asset Asset, suffix string, subDir bool) {
+	location := "./"
+	if subDir == true {
+		location = "./" + Transporter.LatestVersion + "/"
+	}
+	if strings.HasSuffix(asset.Name, suffix) {
+		err := downloadFile(asset.BrowserDownloadURL, location)
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		//Create and Add CDN API URL
+		var api string = "https://cdn.jsdelivr.net/gh/" + Transporter.ThisOwner + "/" + Transporter.ThisRepo + "@" + Transporter.LatestVersion + "/"
+		if subDir == true {
+			api += Transporter.LatestVersion + "/" + asset.Name
+		} else {
+			api += asset.Name
+		}
+		Transporter.Files = append(Transporter.Files, api)
+		//提示 hint
+		fmt.Println(" -- Downloaded")
+	}
+}
+
+///// 全局变量
+var Transporter = &Setting{
+	Version:       "0.1.1",
+	LatestVersion: "",
+	LocalVersion:  "",
+	Owner:         "advancedfx",
+	Repo:          "advancedfx",
+	ThisOwner:     "Purple-CSGO",
+	ThisRepo:      "ActionsTest",
+	Files:         []string{},
+}
+
+func main() {
+	//1.读取settings.json，不存在或出错则赋默认值
 	temp, err := readSettings("./settings.json")
 	if err != nil {
 		log.Fatal(err)
-	} else {
+	} else if temp.Version != "" {
 		Transporter = &temp
 	}
 
 	//2.Welcome~
-	fmt.Printf(Transporter.Version)
+	fmt.Println("----------------------------------------------")
+	fmt.Println("Repo-Transporter Version:", Transporter.Version)
+	fmt.Println("----------------------------------------------")
 
 	//3.如果本地版本为空，利用API获取包含该仓库信息的JSON文件并解析，获得版本号
-	fmt.Println("正在获取", Transporter.ThisOwner, '/', Transporter.ThisRepo, "最新版本信息...")
+	fmt.Println("Getting Latest Info of", Transporter.ThisOwner+"/"+Transporter.ThisRepo, "...")
 	tagName, _, err := parseReleaseInfo(Transporter.ThisOwner, Transporter.ThisRepo)
 	if err != nil {
 		log.Fatal(err)
@@ -364,7 +431,7 @@ func main() {
 	}
 
 	//4.利用API获取包含仓库信息的JSON文件并解析，获得版本号和附件切片
-	fmt.Println("正在获取", Transporter.Owner, '/', Transporter.Repo, "最新版本信息...")
+	fmt.Println("Getting Latest Info of", Transporter.Owner+"/"+Transporter.Repo, "...")
 	tagName, assets, err := parseReleaseInfo(Transporter.Owner, Transporter.Repo)
 	if err != nil {
 		log.Fatal(err)
@@ -372,18 +439,24 @@ func main() {
 		Transporter.LatestVersion = tagName
 	}
 
-	//5.处理附件切片 TODO:可选各种处理方法 下载/改名/根目录或者'./$tagName'
-	for _, asset := range assets {
-		fmt.Println(asset.Name)
-		//获得下载链接
-		//var url, fileName string
-		//for _, file := range latestInst.Assets {
-		//	//过滤掉源码文件
-		//	if file.State == "uploaded" && !strings.Contains(file.Name, ".asc") && strings.Contains(file.Name, ".zip") {
-		//		url = file.BrowserDownloadURL
-		//		fileName = file.Name
-		//	}
-		//}
+	//5.处理附件切片
+	if Transporter.LocalVersion != Transporter.LatestVersion {
+		for _, asset := range assets {
+			fmt.Printf("Asset Name: " + asset.Name)
+
+			//Custom Area: You can set whatever you want to download
+			downloadSuffix(asset, ".zip", true)
+			downloadSuffix(asset, ".exe", true)
+			//download(asset, true)		//download all assets
+			fmt.Printf("\n")
+		}
 	}
 
+	//6.保存内容
+	err = saveSettings("./settings.json")
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	fmt.Println("Job Done!")
 }
